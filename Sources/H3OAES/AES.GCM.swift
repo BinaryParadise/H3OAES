@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import XCTest
 
 public enum H3O {
 }
@@ -59,24 +60,21 @@ extension H3O {
         let Nb: Int = 4
         private var w: [UInt8]
         private var R: [UInt8] = [0x02, 0x00, 0x00, 0x00]
-        var cipher: Cipher {
-            willSet {
-                switch newValue {
-                case .aes128:
-                    Nk = 4; Nr = 10
-                case .aes192:
-                    Nk = 6; Nr = 12
-                case .aes256:
-                    Nk = 8; Nr = 14
-                }
-            }
-        }
+        var cipher: Cipher
         
         init(_ secretKey: [UInt8]) {
             guard let c = Cipher(rawValue: secretKey.count) else {
                 fatalError("secret key length must be one of [16,24,32]")
             }
             cipher = c
+            switch cipher {
+            case .aes128:
+                Nk = 4; Nr = 10
+            case .aes192:
+                Nk = 6; Nr = 12
+            case .aes256:
+                Nk = 8; Nr = 14
+            }
             w = [UInt8](repeating: 0, count: Nb*(Nr+1)*4)
             keyExpansion(key: secretKey)
         }
@@ -95,7 +93,7 @@ extension H3O {
                 w[4*i+3] = key[4*i+3];
             }
 
-            for i in Nk..<Nb*(Nr+1) {
+            for i in Nk ..< Nb*(Nr+1) {
                 tmp[0] = w[4*(i-1)+0];
                 tmp[1] = w[4*(i-1)+1];
                 tmp[2] = w[4*(i-1)+2];
@@ -104,8 +102,7 @@ extension H3O {
                 if i % Nk == 0 {
                     rotateWord(&tmp)
                     subWord(&tmp)
-                    var r = UInt8(i/Nk)
-                    coefAdd(tmp, Rcon(&r), &tmp);
+                    coefAdd(tmp, Rcon(i/Nk), &tmp);
 
                 } else if (Nk > 6 && i%Nk == 4) {
                     subWord(&tmp)
@@ -128,8 +125,8 @@ extension H3O {
         
         func subWord(_ input: inout [UInt8]) {
             for i in 0..<4 {
-                let byte = w[i]
-                w[i] = SBox[Int((byte & 0xF0) >> 4)][Int(byte & 0x0F)]
+                let byte = input[i]
+                input[i] = SBox[Int((byte & 0xF0) >> 4)][Int(byte & 0x0F)]
             }
         }
         
@@ -140,15 +137,26 @@ extension H3O {
             d[3] = a[3] ^ b[3]
         }
         
-        func Rcon(_ i: inout UInt8) -> [UInt8] {
+        func coefMult(_ a: [UInt8], _ b: [UInt8], _ d: inout [UInt8]) {
+            d[0] = gmult(a[0],b[0])^gmult(a[3],b[1])^gmult(a[2],b[2])^gmult(a[1],b[3]);
+            d[1] = gmult(a[1],b[0])^gmult(a[0],b[1])^gmult(a[3],b[2])^gmult(a[2],b[3]);
+            d[2] = gmult(a[2],b[0])^gmult(a[1],b[1])^gmult(a[0],b[2])^gmult(a[3],b[3]);
+            d[3] = gmult(a[3],b[0])^gmult(a[2],b[1])^gmult(a[1],b[2])^gmult(a[0],b[3]);
+        }
+        
+        func gmult(_ a: UInt8, _ b: UInt8) -> UInt8 {
+            return GMULT_AES[Int(256 * Int(a) + Int(b))]
+        }
+        
+        func Rcon(_ i: Int) -> [UInt8] {
             if i == 1 {
                 R[0] = 0x01; // x^(1-1) = x^0 = 1
             } else if (i > 1) {
                 R[0] = 0x02;
-                i -= 1
-                while (i > 1) {
+                var n = i - 1
+                while (n > 1) {
                     R[0] = GMULT_AES[256*Int(R[0]) + 0x02]
-                    i -= 1
+                    n -= 1
                 }
             }
             
@@ -156,7 +164,6 @@ extension H3O {
         }
     
         func encrypt(input: inout [UInt8], out: inout [UInt8]) {
-            var w = [UInt8](repeating: 0, count: Nb*(Nr+1)*4)
             var state = [UInt8](repeating: 0, count: 4 * Nb)
 
             for i in 0..<4 {
@@ -165,18 +172,17 @@ extension H3O {
                 }
             }
 
-            addRoundKey(&state, &w, 0)
+            addRoundKey(&state, w, 0)
 
             for r in 1..<Nr {
                 subBytes(&state)
                 shiftRows(&state)
                 mixColumns(&state)
-                addRoundKey(&state, &w, UInt8(r))
+                addRoundKey(&state, w, UInt8(r))
             }
-
             subBytes(&state)
             shiftRows(&state)
-            addRoundKey(&state, &w, UInt8(Nr));
+            addRoundKey(&state, w, UInt8(Nr));
 
             for i in 0..<4 {
                 for j in 0..<Nb {
@@ -185,7 +191,7 @@ extension H3O {
             }
         }
         
-        func addRoundKey(_ state: inout [UInt8], _ w: inout [UInt8], _ r: UInt8) {
+        func addRoundKey(_ state: inout [UInt8], _ w: [UInt8], _ r: UInt8) {
             for c in 0..<Nb {
                 let idx = 4 * Nb * Int(r) + 4 * c //表达式太复杂导致编译阻塞
                 state[Nb*0+c] = state[Nb * 0 + c] ^ w[idx + 0]   //debug, so it works for Nb !=4
@@ -239,24 +245,141 @@ extension H3O {
         /// - Parameter bytes: 输入
         /// - Returns: 输出
         func mixColumns(_ state: inout [UInt8]) {
-            var a = [UInt8](repeating: 0, count: 4)
-            var b = [UInt8](repeating: 0, count: 4)
-            var h: UInt8
-            /* The array 'a' is simply a copy of the input array 'r'
-             * The array 'b' is each element of the array 'a' multiplied by 2
-             * in Rijndael's Galois field
-             * a[n] ^ b[n] is element n multiplied by 3 in Rijndael's Galois field */
-            for c in 0..<4 {
-                a[c] = state[c];
-                /* h is 0xff if the high bit of r[c] is set, 0 otherwise */
-                h = (state[c] >> 7) & 1; /* arithmetic right shift, thus shifting in either zeros or ones */
-                b[c] = state[c] << 1; /* implicitly removes high bit because b[c] is an 8-bit char, so we xor by 0x1b and not 0x11b in the next line */
-                b[c] ^= h * 0x1B; /* Rijndael's Galois field */
+            let a: [UInt8] = [0x02, 0x01, 0x01, 0x03] // a(x) = {02} + {01}x + {01}x2 + {03}x3
+            
+            var col = [UInt8](repeating: 0, count: 4)
+            var res = [UInt8](repeating: 0, count: 4)
+            for j in 0 ..< Nb {
+                for i in 0..<4 {
+                    col[i] = state[Nb*i+j]
+                }
+
+                coefMult(a, col, &res)
+
+                for i in 0..<4 {
+                    state[Nb*i+j] = res[i]
+                }
             }
-            state[0] = b[0] ^ a[3] ^ a[2] ^ b[1] ^ a[1]; /* 2 * a0 + a3 + a2 + 3 * a1 */
-            state[1] = b[1] ^ a[0] ^ a[3] ^ b[2] ^ a[2]; /* 2 * a1 + a0 + a3 + 3 * a2 */
-            state[2] = b[2] ^ a[1] ^ a[0] ^ b[3] ^ a[3]; /* 2 * a2 + a1 + a0 + 3 * a3 */
-            state[3] = b[3] ^ a[2] ^ a[1] ^ b[0] ^ a[0]; /* 2 * a3 + a2 + a1 + 3 * a0 */
         }
     }
+}
+
+/// XOR
+func ^(lhs: [UInt8], rhs: [UInt8]) -> [UInt8]
+{
+    let minimum = min(rhs.count, lhs.count)
+    
+    var result = [UInt8](repeating: 0, count: minimum)
+    
+    for i in 0..<minimum {
+        result[i] = lhs[i] ^ rhs[i]
+    }
+    
+    return result
+}
+
+extension Array where Element == UInt8 {
+    public func toHexArray() -> String {
+        `lazy`.reduce(into: "") {
+            var s = String($1, radix: 16).uppercased()
+            if s.count == 1 {
+                s = "0" + s
+            }
+            $0 += "0x\(s), "
+        }
+    }
+        
+    /// 16进制字符串
+    /// - Returns: e.g 5ce7bebe65fe2c8308e03df170fbbd38b6a440fc3939b0d8090bee4a61e738c5
+    public func toHexString() -> String {
+        `lazy`.reduce(into: "") {
+            var s = String($1, radix: 16).uppercased()
+            if s.count == 1 {
+                s = "0" + s
+            }
+            $0 += "\(s)"
+        }
+    }
+    
+    public func toString(_ encoding: String.Encoding = .utf8) -> String {
+        return String(data: Data(self), encoding: encoding) ?? ""
+    }
+}
+
+extension String {
+    var uint8Array: [UInt8] {
+        var result: [UInt8] = []
+        var even: Bool = true
+        var byte: UInt8 = 0
+        func decodeByte(c: UInt8) -> UInt8? {
+            switch c {
+            case 0x30...0x39: return c - 0x30
+            case 0x41...0x46: return c - 0x41 + 10
+            case 0x61...0x66: return c - 0x61 + 10
+            default:
+                return nil
+            }
+        }
+        for c in utf8 {
+            guard let val = decodeByte(c: c) else { continue }
+            if even {
+                byte = val << 4
+            } else {
+                byte += val
+                result.append(byte)
+            }
+            even = !even
+        }
+        return result
+    }
+}
+
+public extension Data {
+    var bytes: [UInt8] {
+        return [UInt8](self)
+    }
+}
+
+public func TLSRandomBytes(count: Int) -> [UInt8]
+{
+    var randomBytes = [UInt8](repeating: 0, count: count)
+    
+    randomBytes.withUnsafeMutableBytes { (buffer)  in
+        fillWithRandomBytes(buffer)
+    }
+    
+    return randomBytes
+}
+
+fileprivate func fillWithRandomBytes(_ buffer: UnsafeMutableRawBufferPointer) {
+    #if os(Linux)
+    struct SeedSetter {
+        static let fd: Int32? = {
+            let fd = open("/dev/urandom", O_RDONLY)
+            guard fd >= 0 else {
+                return nil
+            }
+            var seed: UInt32 = 0
+            let seedSize = MemoryLayout<UInt32>.size
+            let result = read(fd, &seed, seedSize)
+            guard result == seedSize else {
+                return nil
+            }
+            close(fd)
+            
+            srandom(seed)
+            
+            return fd
+        }()
+    }
+
+    _ = SeedSetter.fd
+
+    let uint8buffer = &buffer.bindMemory(to: UInt8.self)
+    for i in 0..<buffer.count {
+        uint8buffer[i] = UInt8(random() & 0xff)
+    }
+    #else
+    arc4random_buf(buffer.baseAddress, buffer.count)
+    #endif
 }

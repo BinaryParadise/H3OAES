@@ -1,5 +1,6 @@
 import XCTest
 import class Foundation.Bundle
+import CryptoKit
 @testable import H3OAES
 
 final class H3OAESTests: XCTestCase {
@@ -11,24 +12,22 @@ final class H3OAESTests: XCTestCase {
     }
     
     func testEncryption() throws {
-        let key: [UInt8] = [
-            0x00, 0x01, 0x02, 0x03,
-            0x04, 0x05, 0x06, 0x07,
-            0x08, 0x09, 0x0a, 0x0b,
-            0x0c, 0x0d, 0x0e, 0x0f,
-            0x10, 0x11, 0x12, 0x13,
-            0x14, 0x15, 0x16, 0x17,
-            0x18, 0x19, 0x1a, 0x1b,
-            0x1c, 0x1d, 0x1e, 0x1f]
-
-        var input: [UInt8] = [
-            0x00, 0x11, 0x22, 0x33,
-            0x44, 0x55, 0x66, 0x77,
-            0x88, 0x99, 0xaa, 0xbb,
-            0xcc, 0xdd, 0xee, 0xff]
+        let key: [UInt8] = "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F".uint8Array
+        var input: [UInt8] = "00112233445566778899AABBCCDDEEFF".uint8Array
+        
         var output: [UInt8] = [UInt8](repeating: 0, count: input.count)
         let aes = H3O.AES_GCM(key)
         aes.encrypt(input: &input, out: &output)
-        XCTAssertEqual(output, [0x8e, 0xa2, 0xb7, 0xca, 0x51, 0x67, 0x45, 0xbf, 0xea, 0xfc, 0x49, 0x90, 0x4b, 0x49, 0x60, 0x89])
+        XCTAssertEqual(output.count, 16)
+        XCTAssertEqual(output.toHexString(), "8EA2B7CA516745BFEAFC49904B496089")
+    }
+    
+    func testCryptoKit() throws {
+        let key: [UInt8] = "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F".uint8Array
+        let input: [UInt8] = "00112233445566778899AABBCCDDEEFF".uint8Array
+        let sealedBox = try CryptoKit.AES.GCM.seal(input, using: .init(data: key), nonce: .init(data: Data("000000000000000000000000".uint8Array)))
+        let decrypted = try CryptoKit.AES.GCM.open(.init(nonce: sealedBox.nonce, ciphertext: sealedBox.ciphertext, tag: sealedBox.tag), using: .init(data: key))
+        XCTAssertEqual(decrypted.bytes, input)
+        //XCTAssertEqual(aes.ciphertext.bytes.toHexString(), "8EA2B7CA516745BFEAFC49904B496089")
     }
 }
