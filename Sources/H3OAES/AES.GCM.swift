@@ -163,7 +163,7 @@ extension H3O {
             return R
         }
     
-        func encrypt(input: inout [UInt8], out: inout [UInt8]) {
+        func encrypt(input: [UInt8]) -> [UInt8] {
             var state = [UInt8](repeating: 0, count: 4 * Nb)
 
             for i in 0..<4 {
@@ -184,11 +184,43 @@ extension H3O {
             shiftRows(&state)
             addRoundKey(&state, w, UInt8(Nr));
 
+            var out = [UInt8](repeating: 0, count: input.count)
             for i in 0..<4 {
                 for j in 0..<Nb {
                     out[i+4*j] = state[Nb*i+j]
                 }
             }
+            return out
+        }
+        
+        func decrypt(input: [UInt8]) -> [UInt8] {
+            var state = [UInt8](repeating: 0, count: 4 * Nb)
+
+            for i in 0..<4 {
+                for j in 0..<Nb {
+                    state[Nb*i+j] = input[i+4*j]
+                }
+            }
+
+            addRoundKey(&state, w, UInt8(Nr))
+
+            for r in stride(from: Nr - 1, through: 1, by: -1) {
+                shiftRows(&state, true)
+                subBytes(&state, true)
+                addRoundKey(&state, w, UInt8(r))
+                mixColumns(&state, true)
+            }
+            shiftRows(&state, true)
+            subBytes(&state, true)
+            addRoundKey(&state, w, 0);
+
+            var out = [UInt8](repeating: 0, count: input.count)
+            for i in 0..<4 {
+                for j in 0..<Nb {
+                    out[i+4*j] = state[Nb*i+j]
+                }
+            }
+            return out
         }
         
         func addRoundKey(_ state: inout [UInt8], _ w: [UInt8], _ r: UInt8) {
@@ -223,19 +255,26 @@ extension H3O {
         /// 行位移
         /// - Parameter bytes: 输出
         /// - Returns: 输出
-        func shiftRows(_ state: inout [UInt8]) {
+        func shiftRows(_ state: inout [UInt8], _ inverse: Bool = false) {
             for i in 1..<4 {
                 // shift(1,4)=1; shift(2,4)=2; shift(3,4)=3
                 // shift(r, 4) = r;
                 var s = 0;
                 while (s < i) {
-                    let tmp = state[Nb*i+0];
+                    let tmp = state[inverse ? (Nb*i+Nb-1):(Nb*i+0)]
                     
-                    for k in 1..<Nb {
-                        state[Nb*i+k-1] = state[Nb*i+k]
+                    if inverse {
+                        for k in stride(from: Nb-1, to: 0, by: -1) {
+                                state[Nb*i+k] = state[Nb*i+k-1];
+                        }
+                        state[Nb*i+0] = tmp;
+                    } else {
+                        for k in 1..<Nb {
+                            state[Nb*i+k-1] = state[Nb*i+k]
+                        }
+                        state[Nb*i+Nb-1] = tmp;
                     }
 
-                    state[Nb*i+Nb-1] = tmp;
                     s += 1
                 }
             }
@@ -244,8 +283,8 @@ extension H3O {
         /// 列混淆
         /// - Parameter bytes: 输入
         /// - Returns: 输出
-        func mixColumns(_ state: inout [UInt8]) {
-            let a: [UInt8] = [0x02, 0x01, 0x01, 0x03] // a(x) = {02} + {01}x + {01}x2 + {03}x3
+        func mixColumns(_ state: inout [UInt8], _ inverse: Bool = false) {
+            let a: [UInt8] = inverse ? [0x0e, 0x09, 0x0d, 0x0b] : [0x02, 0x01, 0x01, 0x03]
             
             var col = [UInt8](repeating: 0, count: 4)
             var res = [UInt8](repeating: 0, count: 4)

@@ -6,20 +6,20 @@ import CryptoKit
 final class H3OAESTests: XCTestCase {
     
     func testExample() throws {
-        let i = 0x1D2C3A4F
-        //((i << 8) & 0xFFFFFFFF) ^ (i >> 24)
-        XCTAssertEqual(i << 8 & 0xFFFFFFFF ^ i >> 24, 0x2C3A4F1D)
     }
     
     func testEncryption() throws {
         let key: [UInt8] = "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F".uint8Array
-        var input: [UInt8] = "00112233445566778899AABBCCDDEEFF".uint8Array
+        let input: [UInt8] = "00112233445566778899AABBCCDDEEFF".uint8Array
         
-        var output: [UInt8] = [UInt8](repeating: 0, count: input.count)
+        let output: [UInt8] = [UInt8](repeating: 0, count: input.count)
         let aes = H3O.AES_GCM(key)
-        aes.encrypt(input: &input, out: &output)
-        XCTAssertEqual(output.count, 16)
-        XCTAssertEqual(output.toHexString(), "8EA2B7CA516745BFEAFC49904B496089")
+        let encrypted = aes.encrypt(input: input)
+        XCTAssertEqual(encrypted.count, 16)
+        XCTAssertEqual(encrypted.toHexString(), "8EA2B7CA516745BFEAFC49904B496089")
+        
+        let decrypted = aes.decrypt(input: encrypted)
+        XCTAssertEqual(decrypted, input)
     }
     
     func testCryptoKit() throws {
