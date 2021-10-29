@@ -61,8 +61,9 @@ extension H3O {
         private var w: [UInt8]
         private var R: [UInt8] = [0x02, 0x00, 0x00, 0x00]
         var cipher: Cipher
+        var iv: [UInt8]
         
-        init(_ secretKey: [UInt8]) {
+        init(_ secretKey: [UInt8], _ iv: [UInt8]? = nil) {
             guard let c = Cipher(rawValue: secretKey.count) else {
                 fatalError("secret key length must be one of [16,24,32]")
             }
@@ -75,6 +76,7 @@ extension H3O {
             case .aes256:
                 Nk = 8; Nr = 14
             }
+            self.iv = iv ?? TLSRandomBytes(count:12)
             w = [UInt8](repeating: 0, count: Nb*(Nr+1)*4)
             keyExpansion(key: secretKey)
         }
@@ -162,10 +164,10 @@ extension H3O {
             
             return R
         }
-    
-        func encrypt(input: [UInt8]) -> [UInt8] {
+        
+        func cipherOperation(_ input: [UInt8]) -> [UInt8] {
             var state = [UInt8](repeating: 0, count: 4 * Nb)
-
+            
             for i in 0..<4 {
                 for j in 0..<Nb {
                     state[Nb*i+j] = input[i+4*j]
@@ -192,10 +194,43 @@ extension H3O {
             }
             return out
         }
+    
+        func encrypt(plaintext: [UInt8]) -> [UInt8] {
+
+            var i: Int = 1
+            let counter = iv + i.bytes
+            
+            let ek0 = cipherOperation(counter)
+            var out: [UInt8] = []
+            for trunk in plaintext.batched(by: 16) {
+                i += 1
+                let ek1 = cipherOperation(iv + i.bytes)
+                let encrypted = trunk ^ ek1
+                out.append(contentsOf: encrypted)
+            }
+            return out
+            
+        }
+                
+        func decrypt(cipherText: [UInt8]) -> [UInt8] {
+            var i: Int = 1
+            let counter = iv + i.bytes
+            
+            let ek0 = cipherOperation(counter)
+            var out: [UInt8] = []
+            for trunk in cipherText.batched(by: 16) {
+                i += 1
+                let ek1 = cipherOperation(iv + i.bytes)
+                let decrypted = trunk ^ ek1
+                out.append(contentsOf: decrypted)
+            }
+            return out
+        }
         
-        func decrypt(input: [UInt8]) -> [UInt8] {
+        func decryptOperation(cipherText: [UInt8]) -> [UInt8] {
             var state = [UInt8](repeating: 0, count: 4 * Nb)
 
+            let input = cipherText
             for i in 0..<4 {
                 for j in 0..<Nb {
                     state[Nb*i+j] = input[i+4*j]
